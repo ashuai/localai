@@ -1,20 +1,28 @@
-# localai 多平台构建
+# localai 多平台构建 + 自动发布
 #
-# 产物(可在 Actions 页面下载):
-#   - localai-win-x64.zip        Windows 10+ x64 (MSVC)
-#   - localai-macos-aarch64.tar.gz  macOS Apple Silicon
-#   - localai-macos-x86_64.tar.gz   macOS Intel
-#   - localai-linux-x64.tar.gz   Linux x64,CentOS 7 兼容(glibc 2.17,cross 容器构建)
+# 触发规则(参照 ~/projects/CHAT/DSH/.github/workflows/rust.yml):
+#   - 只有 changelog/ 出现新版本文件(或 workflow 自身变更)才自动构建发布;
+#     平时改 src/、README 等不触发;
+#   - 想随时手动构建:GitHub → Actions → Run workflow(workflow_dispatch)。
 #
-# 触发:push main / 打 tag v* / 手动 workflow_dispatch
+# 发布规则:
+#   - 三平台构建都通过 → release job 读 changelog/ 最高版本号文件(vX.Y.Z.md);
+#   - 对应 Release 已存在 → 自动跳过;不存在 → 创建,notes 用该 changelog 文件内容;
+#   - 产物重命名为 localai-v<版本>-<平台>.* 后挂到 Release。
 
 name: build
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    paths:
+      - 'changelog/**'
+      - '.github/workflows/**'
   workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,7 +32,7 @@ jobs:
     name: Windows x64 (win10+)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -44,7 +52,7 @@ jobs:
           Copy-Item localai.yml, .env.example, README.md $dir/
           Compress-Archive -Path $dir -DestinationPath localai-win-x64.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: localai-win-x64
           path: localai-win-x64.zip
@@ -61,7 +69,7 @@ jobs:
           - arch: x86_64
             target: x86_64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -80,7 +88,7 @@ jobs:
           cp localai.yml .env.example README.md "$dir/"
           tar czf "localai-macos-${{ matrix.arch }}.tar.gz" "$dir"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: localai-macos-${{ matrix.arch }}
           path: localai-macos-${{ matrix.arch }}.tar.gz
@@ -89,7 +97,7 @@ jobs:
     name: Linux x64 (CentOS 7+ compatible)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -113,25 +121,50 @@ jobs:
           cp localai.yml .env.example README.md "$dir/"
           tar czf localai-linux-x64.tar.gz "$dir"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: localai-linux-x64
           path: localai-linux-x64.tar.gz
 
-  # 打 v* tag 时把四份产物发布为 GitHub Release(下载最方便)
+  # 发布规则(参照 DSH):changelog/ 最高版本对应的 Release 不存在 → 发布;
+  # 已存在 → 自动跳过,不会重复发版。
   release:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: [windows, macos, linux-centos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
         with:
-          path: dist
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          generate_release_notes: true
+          path: artifacts
+
+      - name: Determine version from changelog
+        id: ver
+        run: |
+          VERSION=$(ls changelog | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+\.md$' | sed -E 's/^v//; s/\.md$//' | sort -V | tail -1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "检测到版本: $VERSION"
+
+      - name: Publish GitHub Release
+        if: steps.ver.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "v${VERSION} 已存在,跳过发布"
+            exit 0
+          fi
+          # 产物重命名为 localai-v<版本>-<平台>
+          cd artifacts
+          for f in */localai-*; do
+            mv "$f" "localai-v${VERSION}-$(basename "$f" | sed 's/^localai-//')"
+          done
+          cd ..
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes "$(cat changelog/v${VERSION}.md)" \
+            artifacts/localai-v${VERSION}-*
