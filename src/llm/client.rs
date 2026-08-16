@@ -1,4 +1,4 @@
-//! OpenAI 兼容客户端 —— 对接本地 oMLX 服务器(192.168.0.5:9870)。
+//! OpenAI 兼容客户端 —— 对接本地 oMLX 服务器(地址见 localai.yml server.base_url)。
 //!
 //! 实测要点(写入 docs/model-layer.md 的论证依据):
 //! - 稳态单次微调用 ~1.1-1.8s;模型冷加载一次 +16s(之后常驻);

@@ -5,7 +5,8 @@
 //! - 注册内置命令 `/help /plugins /load /unload /model /clear /quit`(ctx.on_command,
 //!   与 `/micro` 同构;卸载插件命令自动消失);
 //! - 提供 [`TuiBackend`] 服务(含主循环),main 装配完成后调用 `run()` 进入交互;
-//! - 退出:`/quit` 或 Ctrl-C 置退出标志,主循环每轮检查。
+//! - 退出:双击 Ctrl+C 或 `/quit` 置退出标志,主循环每轮检查;Esc 不再退出
+//!   (优先中断 chat 调用,否则清空输入框);↑↓ 浏览发送历史。
 
 use crate::cordis::context::Context;
 use crate::cordis::loader::{Loader, LoaderService};
@@ -13,15 +14,18 @@ use crate::cordis::plugin::Plugin;
 use crate::cordis::service::Service;
 use crate::events::{SessionInput, SessionReply, SessionStatus};
 use crate::llm::LlmService;
+use crate::plugins::chat::ChatService;
 use crate::tui::app::App;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
+};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::DefaultTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub fn factory() -> Box<dyn Plugin> {
     Box::new(TuiPlugin)
@@ -42,6 +46,31 @@ pub struct TuiBackend {
     rx: Mutex<Receiver<UiEvent>>,
     loader: Arc<Mutex<Loader>>,
     quit: Arc<AtomicBool>,
+    /// 双击 Ctrl+C 退出:第一次按下记录时间,窗口内再按才真正退出(防误按)
+    exit_arm: Arc<Mutex<Option<Instant>>>,
+    /// 已发送的输入历史(旧→新;仅 Enter 发送的非命令输入)
+    sent: Arc<Mutex<Vec<String>>>,
+    /// 输入历史浏览状态(主循环线程访问;Arc 共享故用 Mutex 包)
+    hist: Mutex<HistState>,
+}
+
+/// 输入历史浏览状态:`pos=0` 显示当前草稿;`pos>0` 显示倒数第 pos 条已发送。
+#[derive(Default)]
+struct HistState {
+    pos: usize,
+    draft: String,
+}
+
+/// 双击 Ctrl+C 的确认窗口:第一次按下后 2 秒内再按才退出
+const EXIT_CONFIRM_WINDOW: Duration = Duration::from_secs(2);
+
+/// RAII 守卫:作用域结束(含 panic 展开)时关闭 bracketed paste,避免终端残留粘贴模式。
+struct DisableBracketedPasteOnDrop;
+
+impl Drop for DisableBracketedPasteOnDrop {
+    fn drop(&mut self) {
+        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+    }
 }
 
 impl Service for TuiBackend {
@@ -56,6 +85,12 @@ impl TuiBackend {
             anyhow::bail!("stdin 不是终端(如需脚本模式,请用 --once / --micro / --list-plugins)");
         }
         let mut terminal = ratatui::init();
+        // 开启 bracketed paste:crossterm 不感知输入法(IME),中文/日文等 IME 提交的文本
+        // 以及用户粘贴的内容,终端(Ghostty/iTerm2 等)会包装成 `\x1B[200~…\x1B[201~`
+        // 以 Paste 事件送达;不开启时这些文本被 crossterm 当作按键流丢弃 → 无法输入中文。
+        let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
+        // RAII:退出(含 panic)时关掉 bracketed paste,避免终端残留粘贴模式
+        let _guard = DisableBracketedPasteOnDrop;
         let res = self.run_loop(&mut terminal);
         ratatui::restore();
         res
@@ -78,6 +113,8 @@ impl TuiBackend {
                             break;
                         }
                     }
+                    // 中文输入法(IME)提交 / 用户粘贴的文本:bracketed paste 模式下的 Paste 事件
+                    Event::Paste(text) => self.on_paste(&text),
                     Event::Resize(_, _) => {}
                     _ => {}
                 }
@@ -90,25 +127,58 @@ impl TuiBackend {
     }
 
     fn refresh_status(&self) {
-        let (loaded, model) = {
+        let (loaded, model, base_url, busy) = {
             let l = self.loader.lock().unwrap();
             let loaded = l.list().iter().filter(|p| p.loaded).count();
-            let model = self
+            // base_url/model 都来自 localai.yml(server 段),不要硬编码
+            let (model, base_url) = self
                 .root
                 .inject::<LlmService>()
-                .map(|s| s.client.model())
-                .unwrap_or_else(|| "?".into());
-            (loaded, model)
+                .map(|s| (s.client.model(), s.client.base_url().to_string()))
+                .unwrap_or_else(|| ("?".into(), "?".into()));
+            // chat 插件可选:未加载(卸载后)不影响状态栏
+            let busy = self
+                .root
+                .inject::<ChatService>()
+                .map(|c| c.is_busy())
+                .unwrap_or(false);
+            (loaded, model, base_url, busy)
         };
-        self.app.lock().unwrap().status =
-            format!(" 插件×{loaded} | 模型 {model} | 192.168.0.5:9870 (oMLX) | Ctrl-C 退出 ");
+        let mut app = self.app.lock().unwrap();
+        app.status = if self.exit_armed() {
+            " 再按一次 Ctrl+C 退出 ".to_string()
+        } else if busy {
+            format!(" 插件×{loaded} | 模型 {model} | {base_url} | ● 调用中(Esc 中断) ")
+        } else {
+            format!(" 插件×{loaded} | 模型 {model} | {base_url} | Ctrl-C ×2 退出 ")
+        };
     }
 
     /// 键盘 → 事件/命令;返回 false 表示退出主循环。
     fn on_key(&self, k: crossterm::event::KeyEvent) -> bool {
+        // 双击 Ctrl+C 退出:除 Ctrl+C 外的任意按键都会取消"再按一次"的确认状态
+        let is_ctrl_c = k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL);
+        if !is_ctrl_c {
+            self.disarm_exit();
+        }
         match k.code {
-            KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => false,
-            KeyCode::Esc => false,
+            KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                // 第一次只提示并进入确认状态;窗口内第二次才退出(防误按)
+                !self.arm_exit()
+            }
+            // Esc 不再退出:优先中断进行中的调用;否则清空输入框
+            KeyCode::Esc => {
+                self.on_esc();
+                true
+            }
+            KeyCode::Up => {
+                self.history_up();
+                true
+            }
+            KeyCode::Down => {
+                self.history_down();
+                true
+            }
             KeyCode::Enter => {
                 let text = {
                     let mut app = self.app.lock().unwrap();
@@ -122,6 +192,19 @@ impl TuiBackend {
                 if let Some(cmd) = text.strip_prefix('/') {
                     self.handle_command(cmd);
                 } else {
+                    // 记入发送历史(有界,只留最近 200 条)
+                    {
+                        let mut sent = self.sent.lock().unwrap();
+                        sent.push(text.clone());
+                        if sent.len() > 200 {
+                            sent.remove(0);
+                        }
+                    }
+                    {
+                        let mut hist = self.hist.lock().unwrap();
+                        hist.pos = 0;
+                        hist.draft.clear();
+                    }
                     self.app.lock().unwrap().push_line(vec![
                         Span::styled(
                             "你 ",
@@ -134,11 +217,15 @@ impl TuiBackend {
                 true
             }
             KeyCode::Char(ch) => {
-                self.app.lock().unwrap().input.push(ch);
+                let mut app = self.app.lock().unwrap();
+                self.reset_hist(&mut app); // 编辑即退出历史浏览,恢复草稿
+                app.input.push(ch);
                 true
             }
             KeyCode::Backspace => {
-                self.app.lock().unwrap().input.pop();
+                let mut app = self.app.lock().unwrap();
+                self.reset_hist(&mut app);
+                app.input.pop();
                 true
             }
             KeyCode::PageUp => {
@@ -153,6 +240,94 @@ impl TuiBackend {
             }
             _ => true,
         }
+    }
+
+    /// Esc:优先中断进行中的调用;否则清空输入框。
+    fn on_esc(&self) {
+        let cancelled = self
+            .root
+            .inject::<ChatService>()
+            .map(|c| c.cancel_current())
+            .unwrap_or(false);
+        let mut app = self.app.lock().unwrap();
+        if cancelled {
+            app.push_status("已中断当前调用(再按一次 Esc 清空输入框)".into());
+        } else {
+            app.input.clear();
+        }
+    }
+
+    /// ↑:浏览已发送历史(首次进入时暂存当前未发送的草稿)。
+    fn history_up(&self) {
+        let mut app = self.app.lock().unwrap();
+        let sent = self.sent.lock().unwrap();
+        if sent.is_empty() {
+            return;
+        }
+        let mut hist = self.hist.lock().unwrap();
+        if hist.pos == 0 {
+            hist.draft = app.input.clone();
+        }
+        if hist.pos < sent.len() {
+            hist.pos += 1;
+            app.input = sent[sent.len() - hist.pos].clone();
+        }
+    }
+
+    /// ↓:向新方向回退(回到当前草稿)。
+    fn history_down(&self) {
+        let mut app = self.app.lock().unwrap();
+        let sent = self.sent.lock().unwrap();
+        let mut hist = self.hist.lock().unwrap();
+        if hist.pos > 0 {
+            hist.pos -= 1;
+            app.input = if hist.pos == 0 {
+                hist.draft.clone()
+            } else {
+                sent[sent.len() - hist.pos].clone()
+            };
+        }
+    }
+
+    /// 编辑输入框时退出历史浏览:恢复草稿并清空暂存。
+    fn reset_hist(&self, app: &mut std::sync::MutexGuard<'_, App>) {
+        let mut hist = self.hist.lock().unwrap();
+        if hist.pos != 0 {
+            hist.pos = 0;
+            app.input = std::mem::take(&mut hist.draft);
+        }
+    }
+
+    /// 双击 Ctrl+C 退出:第一次按下进入确认状态并提示;确认窗口内第二次返回 true(退出)。
+    fn arm_exit(&self) -> bool {
+        let mut arm = self.exit_arm.lock().unwrap();
+        let now = Instant::now();
+        let already_armed = matches!(
+            arm.as_ref(),
+            Some(t) if now.duration_since(*t) <= EXIT_CONFIRM_WINDOW
+        );
+        if already_armed {
+            true
+        } else {
+            *arm = Some(now);
+            false
+        }
+    }
+
+    /// 取消"再按一次退出"的确认状态(任意其他按键触发)。
+    fn disarm_exit(&self) {
+        self.exit_arm.lock().unwrap().take();
+    }
+
+    /// 是否处于退出确认状态(窗口内第一次 Ctrl+C 之后)。
+    fn exit_armed(&self) -> bool {
+        let arm = self.exit_arm.lock().unwrap();
+        matches!(arm.as_ref(), Some(t) if t.elapsed() <= EXIT_CONFIRM_WINDOW)
+    }
+
+    /// 粘贴 / 输入法(IME)提交的文本 → 追加到输入框。
+    fn on_paste(&self, text: &str) {
+        self.app.lock().unwrap().input.push_str(text);
     }
 
     /// 命令统一走 `ctx.run_command`(所有命令都是插件注册的)。
@@ -301,6 +476,9 @@ impl Plugin for TuiPlugin {
             rx: Mutex::new(rx),
             loader,
             quit,
+            exit_arm: Arc::new(Mutex::new(None)),
+            sent: Arc::new(Mutex::new(Vec::new())),
+            hist: Mutex::new(HistState::default()),
         }));
 
         Ok(())
@@ -367,5 +545,89 @@ mod tests {
         let root = loader.lock().unwrap().root().clone();
         let backend = root.inject::<TuiBackend>().unwrap();
         assert!(backend.run().is_err());
+    }
+
+    #[test]
+    fn tui_paste_appends_ime_text_to_input() {
+        // 中文输入法(IME)提交的文本走 Paste 事件 → on_paste 追加到输入框
+        let loader = test_loader();
+        let root = loader.lock().unwrap().root().clone();
+        let backend = root.inject::<TuiBackend>().unwrap();
+        backend.on_paste("你好，世界");
+        assert_eq!(backend.app.lock().unwrap().input, "你好，世界");
+    }
+
+    #[test]
+    fn tui_ctrl_c_requires_double_press() {
+        // 双击 Ctrl+C 才退出:第一次只进入确认状态,第二次(窗口内)才返回退出
+        let loader = test_loader();
+        let root = loader.lock().unwrap().root().clone();
+        let backend = root.inject::<TuiBackend>().unwrap();
+        let ctrl_c = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('c'),
+            crossterm::event::KeyModifiers::CONTROL,
+        );
+        // 第一次 Ctrl+C:不退出
+        assert!(backend.on_key(ctrl_c), "第一次 Ctrl+C 不应退出");
+        assert!(backend.exit_armed(), "第一次按下后应进入确认状态");
+        // 确认窗口内第二次:退出
+        assert!(!backend.on_key(ctrl_c), "窗口内第二次 Ctrl+C 应退出");
+        // 任意其他键取消确认状态 → 之后单次 Ctrl+C 又只是重新进入确认
+        backend.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(!backend.exit_armed(), "其他按键应取消确认状态");
+        assert!(backend.on_key(ctrl_c), "取消后再按一次 Ctrl+C 不应退出");
+        assert!(backend.exit_armed());
+    }
+
+    #[test]
+    fn tui_esc_clears_input_and_never_quits() {
+        // Esc:不退出;空闲时清空输入框
+        let loader = test_loader();
+        let root = loader.lock().unwrap().root().clone();
+        let backend = root.inject::<TuiBackend>().unwrap();
+        let esc = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        backend.app.lock().unwrap().input = "abc".into();
+        assert!(backend.on_key(esc), "Esc 不应退出主循环");
+        assert!(backend.app.lock().unwrap().input.is_empty(), "空闲时 Esc 应清空输入框");
+        assert!(!backend.quit.load(Ordering::SeqCst), "退出标志不应被设置");
+    }
+
+    #[test]
+    fn tui_history_up_down_cycles_with_draft() {
+        // ↑↓ 历史:↑ 回到已发送,↓ 回到未发送草稿;浏览中编辑恢复草稿
+        let loader = test_loader();
+        let root = loader.lock().unwrap().root().clone();
+        let backend = root.inject::<TuiBackend>().unwrap();
+        let key = |code| crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+        // 发送两条消息
+        for msg in ["第一条", "第二条"] {
+            backend.app.lock().unwrap().input = msg.into();
+            assert!(backend.on_key(key(crossterm::event::KeyCode::Enter)));
+        }
+        assert_eq!(backend.sent.lock().unwrap().len(), 2, "应记录 2 条发送历史");
+        // 模拟未发送草稿
+        backend.app.lock().unwrap().input = "草稿".into();
+        // ↑:第二条 → 第一条 → 到顶不动
+        backend.on_key(key(crossterm::event::KeyCode::Up));
+        assert_eq!(backend.app.lock().unwrap().input, "第二条");
+        backend.on_key(key(crossterm::event::KeyCode::Up));
+        assert_eq!(backend.app.lock().unwrap().input, "第一条");
+        backend.on_key(key(crossterm::event::KeyCode::Up));
+        assert_eq!(backend.app.lock().unwrap().input, "第一条", "到顶后不再变化");
+        // ↓:第二条 → 草稿
+        backend.on_key(key(crossterm::event::KeyCode::Down));
+        assert_eq!(backend.app.lock().unwrap().input, "第二条");
+        backend.on_key(key(crossterm::event::KeyCode::Down));
+        assert_eq!(backend.app.lock().unwrap().input, "草稿", "↓ 回到底应恢复草稿");
+        // 浏览中开始编辑 → 恢复草稿并继续输入
+        backend.on_key(key(crossterm::event::KeyCode::Up)); // 显示第二条,草稿暂存
+        backend.on_key(key(crossterm::event::KeyCode::Char('!')));
+        assert_eq!(backend.app.lock().unwrap().input, "草稿!", "编辑应回到草稿并追加字符");
     }
 }

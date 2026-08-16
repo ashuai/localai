@@ -40,7 +40,9 @@ cp .env.example .env        # then edit .env and fill in LLM_API_KEY
   (the core cordis property: unloading reverts everything);
 - `/model Qwen3.6-35b` → switch model (35b is the default main model;
   the 27b is a Claude-distilled variant, avoid unless necessary);
-- `/plugins` `/help` `/clear` `/quit`; **PageUp/PageDown** scroll the history.
+- `/plugins` `/help` `/clear` `/quit`; **↑/↓** browse sent history (your unsent draft is
+  preserved); **PageUp/PageDown** scroll the replies; **Esc** interrupts a running call
+  / clears the input box; **double Ctrl+C** quits.
 - `/fs ls|cat|write|edit|stat|log [path]` — filesystem tools with a **four-layer
   permission model**: sandbox mode (L0) / workspace boundary (L1) / sensitive-file
   blocklist (L2) / read-before-edit + version guards (L3);

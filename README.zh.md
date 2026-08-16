@@ -34,7 +34,8 @@ cp .env.example .env        # 编辑 .env 填入 LLM_API_KEY
 - `/micro <文本>` → 微调用流水线演示(意图分类 → 并行标题/关键词/摘要);
 - `/load <插件>` `/unload <插件>` → 运行时热插拔(核心性质:卸载即回滚);
 - `/model Qwen3.6-35b` → 切换模型(默认主模型 35b;27b 是 Claude 蒸馏变体,非必要不用);
-- `/plugins` `/help` `/clear` `/quit`;**PageUp/PageDown** 翻看历史;
+- `/plugins` `/help` `/clear` `/quit`;**↑↓** 浏览发送历史(未发送草稿自动暂存);
+  **PageUp/PageDown** 翻看回复;**Esc** 中断进行中的调用 / 清空输入框;**双击 Ctrl+C** 退出;
 - `/fs ls|cat|write|edit|stat|log [路径]` —— 文件系统工具,带**四层权限模型**:
   沙箱模式(L0)/ 工作区边界(L1)/ 敏感文件黑名单(L2)/ 读前编辑 + 版本守卫(L3);
 - `/mode [read-only|workspace-write|full]` —— 查看/运行时切换沙箱模式;

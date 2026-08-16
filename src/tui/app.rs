@@ -75,7 +75,7 @@ impl App {
         let input = Paragraph::new(self.input.as_str()).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" 输入(Enter 发送,/ 命令;PageUp/Down 翻页) "),
+                .title(" 输入(Enter 发送;/ 命令;↑↓ 历史;Esc 清空/中断;PgUp/Dn 翻页) "),
         );
         f.render_widget(input, chunks[1]);
 
