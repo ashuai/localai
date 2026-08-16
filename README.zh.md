@@ -39,7 +39,8 @@ cp .env.example .env        # 编辑 .env 填入 LLM_API_KEY
 - `/fs ls|cat|write|edit|stat|log [路径]` —— 文件系统工具,带**四层权限模型**:
   沙箱模式(L0)/ 工作区边界(L1)/ 敏感文件黑名单(L2)/ 读前编辑 + 版本守卫(L3);
 - `/mode [read-only|workspace-write|full]` —— 查看/运行时切换沙箱模式;
-- `/run <命令行>` —— 工作区根内执行子进程(默认超时 30s);
+- `/run <命令行>` —— 工作区根内执行子进程(默认超时 30s);Windows 优先走
+  `cmd /C`(支持内置命令/管道),PowerShell 专属语法请显式写 `powershell -Command ...`;
 - `/pwd` —— 显示工作区根。
 
 每次回复后,microtask 插件会自动做 2 个并行微调用(意图分类 + 关键词),状态区显示

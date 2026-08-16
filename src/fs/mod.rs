@@ -1,7 +1,7 @@
 //! FsService —— 文件系统工具服务(参照 DSH 真实源码 `dsh-fs` / `dsh-fs-sandbox` /
 //! `dsh-fs-observation-policy`)。
 //!
-//! 四层权限模型(论证见本地文档 `localai-docs/fs-permissions.md`):
+//! 四层权限模型:
 //! - **L0 模式 SandboxMode**:read-only / workspace-write(默认)/ full,运行时可切(`/mode`);
 //! - **L1 边界**:路径规范化后必须落在工作区根/额外可写区内(full 放开);
 //! - **L2 文件分类**:敏感文件(.env/*.key/id_rsa*/*.pem)任何模式读写都拒;

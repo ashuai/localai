@@ -4,7 +4,6 @@
 //! - 工作目录限定在工作区根(与 fs 策略同一边界);
 //! - 超时轮询 try_wait(30ms 间隔),超时 kill;
 //! - stdout/stderr 由 wait_with_output 并发读取,无管道死锁。
-//! 设计论证见本地文档 `localai-docs/fs-tools.md`。
 
 use crate::cordis::service::Service;
 use std::path::PathBuf;
@@ -60,7 +59,13 @@ impl SubprocessService {
         }
     }
 
-    /// 执行一行命令(cmd 与参数按空白拆分;复杂 shell 语法留给 shell 服务)。
+    /// 执行一行命令。
+    ///
+    /// - **Windows**:优先用 `cmd /C <line>` 执行(支持 `dir`/`echo`/`type` 等内置命令、
+    ///   管道与重定向);需要 PowerShell 专属语法时,调用方应显式写 `powershell -Command ...`
+    ///   (base prompt 里的 shell 策略与此一致);
+    /// - **Unix**:按空白拆分直接执行(与历史行为一致)。
+    ///
     /// 工作目录与 fs 同边界:超出工作区根拒绝。
     pub fn run(&self, cmdline: &str, opts: &RunOptions) -> anyhow::Result<RunOutput> {
         let cwd = match &opts.cwd {
@@ -72,13 +77,28 @@ impl SubprocessService {
             anyhow::bail!("拒绝执行:工作目录越界 {}", cwd.display());
         }
 
-        let parts: Vec<&str> = cmdline.split_whitespace().collect();
-        if parts.is_empty() {
-            anyhow::bail!("空命令");
-        }
-        let mut cmd = Command::new(parts[0]);
-        cmd.args(&parts[1..])
-            .current_dir(&cwd)
+        let mut cmd = {
+            #[cfg(windows)]
+            {
+                if cmdline.trim().is_empty() {
+                    anyhow::bail!("空命令");
+                }
+                let mut c = Command::new("cmd");
+                c.arg("/C").arg(cmdline);
+                c
+            }
+            #[cfg(not(windows))]
+            {
+                let parts: Vec<&str> = cmdline.split_whitespace().collect();
+                if parts.is_empty() {
+                    anyhow::bail!("空命令");
+                }
+                let mut c = Command::new(parts[0]);
+                c.args(&parts[1..]);
+                c
+            }
+        };
+        cmd.current_dir(&cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -150,23 +170,51 @@ mod tests {
     #[test]
     fn unknown_command_fails() {
         let (_dir, svc) = test_svc();
-        // spawn 失败(命令不存在)→ Err(跨平台,不依赖 shell)
-        assert!(svc
-            .run("definitely-not-a-real-cmd-xyz", &RunOptions::default())
-            .is_err());
+        let out = svc.run("definitely-not-a-real-cmd-xyz", &RunOptions::default());
+        #[cfg(windows)]
+        {
+            // cmd /C:spawn 总是成功,命令不存在 → 非零退出 + stderr 报错
+            let out = out.unwrap();
+            assert_ne!(out.status, 0, "未知命令应非零退出");
+            assert!(
+                out.stderr.contains("definitely-not-a-real-cmd-xyz")
+                    || out.stderr.contains("不是内部或外部命令")
+                    || out.stderr.to_lowercase().contains("not recognized"),
+                "stderr 应包含错误信息: {}",
+                out.stderr
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            assert!(out.is_err(), "spawn 失败(命令不存在)");
+        }
     }
 
     #[test]
     fn timeout_kills() {
         let (_dir, svc) = test_svc();
+        #[cfg(windows)]
+        let cmdline = "ping -n 30 127.0.0.1 >nul"; // ~30s,远超 300ms 超时
+        #[cfg(not(windows))]
+        let cmdline = "sleep 30";
         let out = svc.run(
-            "sleep 30",
+            cmdline,
             &RunOptions {
                 timeout: Duration::from_millis(300),
                 ..Default::default()
             },
         );
         assert!(out.is_err(), "应超时 kill");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runs_cmd_builtins() {
+        let (_dir, svc) = test_svc();
+        // cmd 内置命令(echo)经 cmd /C 可执行;直接 spawn 会失败
+        let out = svc.run("echo ok", &RunOptions::default()).unwrap();
+        assert_eq!(out.status, 0);
+        assert!(out.stdout.contains("ok"), "stdout: {}", out.stdout);
     }
 
     #[test]

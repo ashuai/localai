@@ -1,7 +1,7 @@
 //! 纯渲染层:App 只持有渲染状态(lines/input/scroll/status)并绘制。
 //!
 //! 交互编排(键盘 → 事件/命令、事件 → 渲染)由 `tui` 插件(TuiBackend)负责,
-//! 见 `src/plugins/tui.rs` 与本地论证文档 `localai-docs/tui-plugin.md`。
+//! 见 `src/plugins/tui.rs`(交互编排)。
 
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};

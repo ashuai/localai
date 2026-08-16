@@ -7,12 +7,24 @@ server:
   timeout_secs: 120
 
 plugins:
+  - name: memory
+    enabled: true
+    options:
+      memory_max_chars: 500           # 次级记忆预算(≈500~750 token;替代几千 token 原始轮次,净省)
+      critical_max_items: 8           # 关键记忆条数上限(S 级,不计入预算)
+      critical_reaudit: 6             # critical 重审门槛:条数≥6 时审计重审淘汰过时约束
+      grace_turns: 3                  # 临时窗口:驱逐时最近 3 条豁免(防"刚说完就消失")
+      trigger_turns: 6                # 距上次审计新增 6 轮触发全量审计
+      history_turns: 6                # 近期原样保留轮数
+      persist:
+        dir: "default"                # "default"=跟随主程序(可执行文件目录);"~"=家目录
+
   - name: chat
     enabled: true
     options:
       model: Qwen3.6-35b
       enable_thinking: false          # 本地推理模型默认把思考过程混进 content;关闭后回复直接、JSON 干净
-      history_turns: 6                # 上下文纪律:只保留最近 6 轮,绝不无限累积
+      history_turns: 6                # 上下文纪律(memory 插件未加载时的滑动窗口兜底)
 
   - name: microtask
     enabled: true

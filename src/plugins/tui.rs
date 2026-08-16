@@ -1,4 +1,4 @@
-//! tui 插件 —— 交互层插件化(论证见本地文档 `localai-docs/tui-plugin.md`)。
+//! tui 插件 —— 交互层插件化。
 //!
 //! 职责(全部走 cordis 通道):
 //! - 订阅 `session/reply` `session/status` → mpsc → 渲染;
@@ -350,13 +350,34 @@ impl TuiBackend {
 
     fn apply(&self, ev: UiEvent) {
         match ev {
-            UiEvent::Reply(text) => self.app.lock().unwrap().push_line(vec![
-                Span::styled(
-                    "AI ",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(text),
-            ]),
+            // AI 回复:Markdown 渲染 + 着色(见 src/tui/markdown.rs);首行带 "AI " 前缀
+            UiEvent::Reply(text) => {
+                let mut app = self.app.lock().unwrap();
+                let mut first = true;
+                for line in crate::tui::markdown::render(&text) {
+                    if first {
+                        let mut spans = vec![Span::styled(
+                            "AI ",
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        )];
+                        spans.extend(line.spans);
+                        app.push_line(spans);
+                        first = false;
+                    } else {
+                        app.push_line(line.spans);
+                    }
+                }
+                if first {
+                    // 空回复兜底
+                    app.push_line(vec![
+                        Span::styled(
+                            "AI ",
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("(空回复)", Style::default().fg(Color::DarkGray)),
+                    ]);
+                }
+            }
             UiEvent::Status(text) => self.app.lock().unwrap().push_status(text),
         }
     }

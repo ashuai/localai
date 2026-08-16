@@ -3,9 +3,11 @@
 //! 设计论证详见 `docs/model-layer.md`。
 
 pub mod client;
+pub mod compress;
 pub mod micro;
 
 pub use client::{ChatMessage, ChatRequest, ChatResponse, ChatUsage, LlmClient, LlmConfig};
+pub use compress::{AuditOutcome, Compressor, EntryScore, HistoryEntry, now_ts};
 pub use micro::{extract_json, MicroEngine, MicroOutcome, MicroTask};
 
 use crate::cordis::service::Service;

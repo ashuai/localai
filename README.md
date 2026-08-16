@@ -48,6 +48,8 @@ cp .env.example .env        # then edit .env and fill in LLM_API_KEY
   blocklist (L2) / read-before-edit + version guards (L3);
 - `/mode [read-only|workspace-write|full]` — view/switch the sandbox mode at runtime;
 - `/run <cmdline>` — subprocess execution inside the workspace root (30s timeout);
+  on Windows it prefers `cmd /C` (builtins & pipes work); write
+  `powershell -Command ...` explicitly for PowerShell-only syntax;
 - `/pwd` — show the workspace root.
 
 After every reply, the `microtask` plugin automatically runs 2 parallel micro-calls

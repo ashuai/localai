@@ -13,4 +13,5 @@ pub mod exec;
 pub mod fs;
 pub mod llm;
 pub mod plugins;
+pub mod system;
 pub mod tui;
