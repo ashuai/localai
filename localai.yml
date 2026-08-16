@@ -1,0 +1,22 @@
+# localai 配置 —— cordis 风格 loader:内核只负责插拔,能力全部来自插件
+server:
+  base_url: http://192.168.0.5:9870   # 本地 oMLX 服务器(OpenAI 兼容)
+  api_key_env: LLM_API_KEY            # 从环境变量读 key(也可直接写 api_key 字段)
+  default_model: Qwen3.6-35b          # 主模型(35b;Qwen3.5-27b 是 Claude 蒸馏模型,非必要不用)
+  max_concurrent: 6                   # 微调用并发上限(服务器 max_concurrent_requests=12,留余量)
+  timeout_secs: 120
+
+plugins:
+  - name: chat
+    enabled: true
+    options:
+      model: Qwen3.6-35b
+      enable_thinking: false          # 本地推理模型默认把思考过程混进 content;关闭后回复直接、JSON 干净
+      history_turns: 6                # 上下文纪律:只保留最近 6 轮,绝不无限累积
+
+  - name: microtask
+    enabled: true
+    options:
+      model: Qwen3.6-35b
+      max_retries: 2                  # 微调用零成本 → 解析失败直接重试
+      max_concurrent: 6
