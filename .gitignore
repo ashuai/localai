@@ -1,4 +1,15 @@
+# ---- 本地 ----
 /target
 .env
 *.log
 .DS_Store
+
+# ---- GitHub Cargo 模板 ----
+debug
+target
+
+# rustfmt 备份
+**/*.rs.bk
+
+# MSVC Windows 构建调试信息
+*.pdb
