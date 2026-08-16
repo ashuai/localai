@@ -1,74 +1,95 @@
 # localai
 
-DSH 式 **cordis 插件模式**的 Rust 本地 LLM 壳 —— 内核只负责插拔,能力全部来自插件。
+A Rust implementation of the **DSH-style cordis plugin architecture** for local LLMs —
+the kernel only plugs and unplugs, all capabilities come from plugins.
 
-- **模型层**:接入本地 oMLX 服务器(192.168.0.5:9870,主模型 `Qwen3.6-35b`),
-  按"小上下文、零成本、频繁微调用"原则设计(论证见 `docs/model-layer.md`);
-- **架构**:cordis 模式(事件总线 + 服务注入 + effect 生命周期 + Loader)的
-  Rust 映射(见 `docs/architecture.md`);
-- **交互**:TUI(ratatui);另有 `--once` 非交互模式便于脚本验证。
+- **Model layer**: talks to your local oMLX server (`192.168.0.5:9870`, main model
+  `Qwen3.6-35b`), designed around **small contexts, zero cost, frequent micro-calls**
+  (design rationale: [`docs/model-layer.md`](docs/model-layer.md));
+- **Architecture**: the cordis pattern — event bus + service injection + effect
+  lifecycle (unload = everything reverts) + Loader (see
+  [`docs/architecture.md`](docs/architecture.md));
+- **UI**: a TUI built on [ratatui](https://github.com/ratatui/ratatui); plus
+  non-interactive `--once` / `--micro` modes for scripting.
 
-## 快速开始
+## Quick start (prebuilt binary)
 
-```bash
-cd localai
-cp .env.example .env        # 填入 LLM_API_KEY(服务器 ~/.omlx/settings.json 的 auth.api_key)
-cargo run --release         # TUI
-cargo run -- --once "你好"  # 非交互跑一轮对话
-cargo run -- --micro "..."  # 微调用流水线演示(意图→并行抽取,带每阶段耗时)
-cargo run -- --list-plugins # 查看插件
-```
-
-## 使用
-
-- 普通输入 → 回车发送(chat 插件 → 本地 LLM);
-- `/micro <文本>` → 微调用流水线演示(意图分类 → 并行抽取标题/关键词/摘要);
-- `/load chat` `/unload microtask` → 运行时热插拔(cordis 核心性质:卸载即回滚);
-- `/model Qwen3.6-35b` → 切换模型(默认 35b,27b 非必要不用);
-- `/plugins` `/help` `/clear` `/quit`。
-
-每次回复后,microtask 插件会自动做 2 个并行微调用(意图分类 + 关键词),
-状态区会显示 `[micro] 意图=… | 关键词=… (耗时)` —— 零成本频繁微调用的活体演示。
-
-## 目录
-
-```
-src/cordis/    插件化核心(Context / 事件 / Service / Plugin / Loader)
-src/llm/       模型层(OpenAI 兼容客户端 + 微调用协议)
-src/plugins/   内置插件(chat / microtask)
-src/tui/       TUI 交互
-docs/          architecture.md(cordis 映射)· model-layer.md(模型层论证)
-changelog/     版本日志 —— CI 发版的唯一数据源(见 changelog/README.md)
-```
-
-## 多平台构建与发布(GitHub Actions)
-
-无需本地工具链。**何时触发**(规则参照 DSH 项目):
-
-- **自动构建**:向 `main` push 且改动命中 `changelog/**` 或 `.github/workflows/**`
-  (即出现新版本日志、或 workflow 变更)才自动构建 + 发布;
-  平时改 `src/`、`README.md` **不触发**;
-- **手动构建**:GitHub → **Actions** → **Run workflow**(`workflow_dispatch`)。
-
-**发版**(推荐方式,产物进 Release 页一键下载):
+Download the package for your platform from
+**[GitHub Releases](https://github.com/ashuai/localai/releases)** (or the **Artifacts**
+of the latest run in Actions), unpack it, then:
 
 ```bash
-cp changelog/v0.1.0.md changelog/v0.2.0.md   # 写新版本日志(唯一要做的事)
+# 1. Configure the API key once (the server's key, see server ~/.omlx/settings.json auth.api_key)
+cp .env.example .env        # then edit .env and fill in LLM_API_KEY
+
+# 2. Run the binary
+./localai                   # TUI
+./localai --once "hi"       # one-shot chat round (prints the reply, exits)
+./localai --micro "..."     # micro-call pipeline demo (intent → parallel extraction)
+./localai --list-plugins    # list plugins and load state
+```
+
+> Windows: `localai.exe`; the `.env` file sits next to the executable.
+> The package contains: `localai[.exe]` + `localai.yml` + `.env.example` + `README.md`.
+
+## Usage
+
+- Type a message and press **Enter** → the `chat` plugin calls the local LLM;
+- `/micro <text>` → micro-call pipeline demo (classify → parallel title/tags/summary);
+- `/load <plugin>` `/unload <plugin>` → hot plug/unplug at runtime
+  (the core cordis property: unloading reverts everything);
+- `/model Qwen3.6-35b` → switch model (35b is the default main model;
+  the 27b is a Claude-distilled variant, avoid unless necessary);
+- `/plugins` `/help` `/clear` `/quit`; **PageUp/PageDown** scroll the history.
+
+After every reply, the `microtask` plugin automatically runs 2 parallel micro-calls
+(intent classification + keywords) and prints a status line like
+`[micro] 意图=question | 关键词=… (1.2s)` — a live demo of zero-cost ambient calls.
+
+## Layout
+
+```
+src/cordis/    plugin core (Context / events / Service / Plugin / Loader)
+src/llm/       model layer (OpenAI-compatible client + micro-call protocol)
+src/plugins/   built-in plugins (chat / microtask)
+src/tui/       TUI interaction (ratatui)
+docs/          architecture.md (cordis mapping) · model-layer.md (micro-call rationale)
+changelog/     version log — the single source of truth for CI releases
+```
+
+## Build & release (GitHub Actions)
+
+No local toolchain needed. **When it triggers** (rule aligned with the DSH project):
+
+- **Auto-build**: pushing to `main` with changes under `changelog/**` or
+  `.github/workflows/**` (i.e. a new version log, or a workflow change) triggers
+  the 3-platform build + release; editing `src/`, `README.md`, etc. does **not**;
+- **Manual build**: GitHub → **Actions** → **Run workflow** (`workflow_dispatch`).
+
+**Releasing** (recommended; artifacts land on the Releases page):
+
+```bash
+cp changelog/v0.1.0.md changelog/v0.2.0.md   # write the new version log (the only step)
 git add changelog && git commit -m "release: v0.2.0" && git push
 ```
 
-流程自动完成:三平台构建通过 → 读 changelog 最高版本 → 对应 Release 不存在则发布
-(`vX.Y.Z`,notes 用日志文件内容),产物重命名为 `localai-v<版本>-<平台>.*`:
-`localai-v0.1.0-win-x64.zip`、`localai-v0.1.0-macos-{aarch64,x86_64}.tar.gz`、
-`localai-v0.1.0-linux-x64.tar.gz`(CentOS 7+ 兼容,glibc 2.17)。已发布的版本
-自动跳过,不会重复发版。
+The pipeline then: builds all 3 platforms → reads the highest version in `changelog/`
+→ publishes a Release (`vX.Y.Z`, notes from the log file) only if it does not exist yet,
+renaming artifacts to `localai-v<version>-<platform>.*`:
+`localai-v0.1.0-win-x64.zip`, `localai-v0.1.0-macos-{aarch64,x86_64}.tar.gz`,
+`localai-v0.1.0-linux-x64.tar.gz` (CentOS 7+ compatible, glibc 2.17).
+Already-published versions are skipped automatically.
 
-每个压缩包内:`localai[.exe]` + `localai.yml` + `.env.example` + `README.md`。
-首次使用:复制 `.env.example` 为 `.env` 并填入 LLM_API_KEY(服务器
-`~/.omlx/settings.json` 的 `auth.api_key`),然后运行 `localai`。
-
-## 测试
+## Build from source (developers)
 
 ```bash
-cargo test    # cordis 核心性质(卸载回滚/事件/服务)+ loader + JSON 提取
+cargo run --release          # TUI
+cargo run -- --once "hi"     # one-shot chat
+cargo test                   # cordis core properties + loader + JSON extraction
+```
+
+## Tests
+
+```bash
+cargo test    # effect rollback on unload / event bus / services / loader / JSON extraction
 ```
