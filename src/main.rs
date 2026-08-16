@@ -1,16 +1,18 @@
-//! localai 入口:读配置 → 装配 Loader(注入 llm 核心服务)→ 加载插件 → 进入交互。
+//! localai 入口:读配置 → 装配 Loader(注入 llm/loader 核心服务)→ 加载插件 →
+//! 交互(TUI 插件接管主循环;`--once/--micro/--list-plugins` 不走 TUI)。
 //!
 //! 用法:
-//! - `localai`                启动 TUI
+//! - `localai`                启动 TUI(tui 插件提供 TuiBackend)
 //! - `localai --once <文本>`  非交互跑一轮(chat 插件),打印回复后退出
+//! - `localai --micro <文本>` 非交互跑微调用流水线(microtask 插件)
 //! - `localai --list-plugins` 列出插件与加载状态
-//! - `localai --self-test`    装配自检
 
 use anyhow::Context as _;
-use localai::cordis::loader::Loader;
+use localai::cordis::loader::{Loader, LoaderService};
 use localai::events::{SessionReply, SessionStatus};
 use localai::llm::{LlmClient, LlmConfig};
 use localai::plugins;
+use localai::plugins::tui::TuiBackend;
 use serde::Deserialize;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -78,10 +80,20 @@ fn main() -> anyhow::Result<()> {
         max_concurrent: cfg.server.max_concurrent,
     });
 
-    let mut loader = Loader::new(client, plugins::builtin());
+    // 装配:Loader(含 llm 核心服务)+ LoaderService(tui 插件热插拔需要)
+    let loader = Arc::new(Mutex::new(Loader::new(client, plugins::builtin())));
+    loader
+        .lock()
+        .unwrap()
+        .root()
+        .provide(Arc::new(LoaderService { loader: Arc::clone(&loader) }));
+
+    // 加载配置插件(chat / microtask / tui)
     for p in &cfg.plugins {
         if p.enabled {
             loader
+                .lock()
+                .unwrap()
                 .load(&p.name, p.options.clone())
                 .with_context(|| format!("加载插件 {}", p.name))?;
         }
@@ -89,17 +101,15 @@ fn main() -> anyhow::Result<()> {
 
     match args.get(1).map(|s| s.as_str()) {
         Some("--list-plugins") => {
-            for p in loader.list() {
+            let l = loader.lock().unwrap();
+            for p in l.list() {
                 println!("{:<12} {}", p.name, if p.loaded { "已加载" } else { "未加载" });
             }
-            println!("核心服务: {}", loader.root().service_names().join(", "));
+            println!("核心服务: {}", l.root().service_names().join(", "));
             Ok(())
         }
         Some("--once") => {
-            let text = args
-                .get(2)
-                .cloned()
-                .unwrap_or_else(|| "你好".to_string());
+            let text = args.get(2).cloned().unwrap_or_else(|| "你好".to_string());
             run_once(&loader, &text)
         }
         Some("--micro") => {
@@ -107,8 +117,9 @@ fn main() -> anyhow::Result<()> {
             run_micro(&loader, &text)
         }
         Some("--self-test") => {
-            println!("核心服务: {}", loader.root().service_names().join(", "));
-            for p in loader.list() {
+            let l = loader.lock().unwrap();
+            println!("核心服务: {}", l.root().service_names().join(", "));
+            for p in l.list() {
                 println!(
                     "插件 {:<12} {}",
                     p.name,
@@ -118,7 +129,16 @@ fn main() -> anyhow::Result<()> {
             println!("自检完成");
             Ok(())
         }
-        _ => localai::tui::run(Arc::new(Mutex::new(loader))),
+        _ => {
+            // 交互:tui 插件提供的 TuiBackend 接管主循环
+            let backend = loader
+                .lock()
+                .unwrap()
+                .root()
+                .inject::<TuiBackend>()
+                .ok_or_else(|| anyhow::anyhow!("tui 插件未加载(localai.yml 检查 plugins.tui.enabled)"))?;
+            backend.run()
+        }
     }
 }
 
@@ -143,8 +163,8 @@ fn resolve_key(server: &ServerCfg) -> anyhow::Result<String> {
 }
 
 /// `--once` 模式:走与 TUI 相同的事件路径(session/input → chat → session/reply)。
-fn run_once(loader: &Loader, text: &str) -> anyhow::Result<()> {
-    let root = loader.root().clone();
+fn run_once(loader: &Arc<Mutex<Loader>>, text: &str) -> anyhow::Result<()> {
+    let root = loader.lock().unwrap().root().clone();
     let (tx, rx) = mpsc::channel();
     let tx2 = tx.clone();
     root.on(move |ev: &SessionReply| {
@@ -165,8 +185,8 @@ fn run_once(loader: &Loader, text: &str) -> anyhow::Result<()> {
 }
 
 /// `--micro` 模式:直接跑 microtask 插件的 3 阶段微调用流水线并打印状态行。
-fn run_micro(loader: &Loader, text: &str) -> anyhow::Result<()> {
-    let root = loader.root().clone();
+fn run_micro(loader: &Arc<Mutex<Loader>>, text: &str) -> anyhow::Result<()> {
+    let root = loader.lock().unwrap().root().clone();
     let (tx, rx) = mpsc::channel::<String>();
     let tx2 = tx.clone();
     root.on(move |ev: &SessionStatus| {

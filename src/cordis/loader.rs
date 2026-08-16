@@ -5,11 +5,24 @@
 
 use crate::cordis::context::Context;
 use crate::cordis::plugin::Plugin;
+use crate::cordis::service::Service;
 use crate::llm::{LlmClient, LlmService};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub type PluginFactory = fn() -> Box<dyn Plugin>;
+
+/// 宿主核心服务:tui 等需要热插拔的插件通过它访问 Loader。
+/// (Loader 是可变资源,经 `Arc<Mutex<Loader>>` 共享;由 main 在装配时注入根作用域)
+pub struct LoaderService {
+    pub loader: Arc<Mutex<Loader>>,
+}
+
+impl Service for LoaderService {
+    fn service_name_static() -> &'static str {
+        "loader"
+    }
+}
 
 pub struct LoadedPlugin {
     pub name: String,

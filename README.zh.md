@@ -44,8 +44,8 @@ cp .env.example .env        # 编辑 .env 填入 LLM_API_KEY
 ```
 src/cordis/    插件化核心(Context / 事件 / Service / Plugin / Loader)
 src/llm/       模型层(OpenAI 兼容客户端 + 微调用协议)
-src/plugins/   内置插件(chat / microtask)
-src/tui/       TUI 交互(ratatui)
+src/plugins/   内置插件(chat / microtask / tui)
+src/tui/       TUI 渲染状态(归 tui 插件所有)
 docs/          architecture.md(cordis 映射)· model-layer.md(模型层论证)
 changelog/     版本日志 —— CI 发版的唯一数据源
 ```

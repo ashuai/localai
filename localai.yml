@@ -19,4 +19,7 @@ plugins:
     options:
       model: Qwen3.6-35b
       max_retries: 2                  # 微调用零成本 → 解析失败直接重试
-      max_concurrent: 6
+
+  - name: tui
+    enabled: true
+    options: {}                        # 交互层插件:命令/事件全走 cordis 通道

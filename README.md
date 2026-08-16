@@ -51,8 +51,8 @@ After every reply, the `microtask` plugin automatically runs 2 parallel micro-ca
 ```
 src/cordis/    plugin core (Context / events / Service / Plugin / Loader)
 src/llm/       model layer (OpenAI-compatible client + micro-call protocol)
-src/plugins/   built-in plugins (chat / microtask)
-src/tui/       TUI interaction (ratatui)
+src/plugins/   built-in plugins (chat / microtask / tui)
+src/tui/       TUI rendering state (owned by the tui plugin)
 docs/          architecture.md (cordis mapping) · model-layer.md (micro-call rationale)
 changelog/     version log — the single source of truth for CI releases
 ```

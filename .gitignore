@@ -13,3 +13,6 @@ target
 
 # MSVC Windows 构建调试信息
 *.pdb
+
+# 本地论证文档(不上传 GitHub)
+localai-docs/
