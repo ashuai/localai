@@ -4,16 +4,19 @@
 //! [`SubprocessService`](crate::exec::SubprocessService),把文件系统与子进程
 //! 能力暴露为斜杠命令(全走 ctx.on_command,卸载即消失):
 //! - `/fs ls [path]` 列目录(带类型/大小)
-//! - `/fs cat <path>` 读文本
+//! - `/fs cat <path>` 读文本(登记 observed)
 //! - `/fs write <path> <content>` 原子写
+//! - `/fs edit <path> <from> <to>` 字面量编辑(需先 /fs cat 读过,L3 read-before-edit)
 //! - `/fs stat <path>` 元信息(含版本指纹)
+//! - `/fs log [n]` 审计流水(读/写/拒)
 //! - `/run <cmdline>` 子进程执行(工作区根内,默认超时 30s)
+//! - `/mode [read-only|workspace-write|full]` 查看/切换 L0 沙箱模式
 //! - `/pwd` 显示工作区根
 
 use crate::cordis::context::Context;
 use crate::cordis::plugin::Plugin;
 use crate::exec::SubprocessService;
-use crate::fs::{FsKind, FsService, WriteGuard};
+use crate::fs::{FsKind, FsService, SandboxMode, WriteGuard};
 use std::sync::Arc;
 
 pub fn factory() -> Box<dyn Plugin> {
@@ -54,6 +57,23 @@ impl Plugin for ToolsPlugin {
         // ---- /pwd ----
         let root = fs_svc.policy.workspace_root.clone();
         ctx.on_command("pwd", move |_: &str| root.display().to_string());
+
+        // ---- /mode (L0 沙箱模式,运行时可切) ----
+        let fs_mode = Arc::clone(&fs_svc);
+        ctx.on_command("mode", move |args: &str| {
+            let args = args.trim();
+            if args.is_empty() {
+                format!("当前模式: {}(默认 workspace-write)", fs_mode.mode())
+            } else {
+                match args.parse::<SandboxMode>() {
+                    Ok(m) => {
+                        fs_mode.set_mode(m);
+                        format!("模式已切换: {m}")
+                    }
+                    Err(e) => format!("错误: {e}"),
+                }
+            }
+        });
 
         // ---- /run ----
         let exec = Arc::clone(&exec_svc);
@@ -167,7 +187,41 @@ fn fs_cmd(fs: &Arc<FsService>, args: &str) -> String {
                 Err(e) => e.to_string(),
             }
         }
-        _ => "用法: /fs ls [path] | /fs cat <path> | /fs write <path> <content> | /fs stat <path>".into(),
+        "edit" => {
+            // /fs edit <path> <from> <to>(参数无空格;需要先 /fs cat 读过)
+            let mut p2 = rest.splitn(3, ' ');
+            let from = p2.next().unwrap_or("");
+            let to = p2.next().unwrap_or("");
+            if path.is_empty() || from.is_empty() {
+                return "用法: /fs edit <path> <from> <to>(先 /fs cat 读过该文件)".into();
+            }
+            match fs.resolve(path) {
+                Ok(abs) => match fs.edit_text(&abs, from, to, WriteGuard::Unconditional) {
+                    Ok(()) => format!("已编辑 {}", abs.display()),
+                    Err(e) => e.to_string(),
+                },
+                Err(e) => e.to_string(),
+            }
+        }
+        "log" => {
+            let n = path.parse::<usize>().unwrap_or(20);
+            let log = fs.access_log(n);
+            if log.is_empty() {
+                return "(暂无访问记录)".into();
+            }
+            let mut lines = Vec::new();
+            for l in log {
+                lines.push(format!(
+                    "{} {:<6} {} {}",
+                    l.time,
+                    l.op,
+                    if l.ok { "OK  " } else { "DENY" },
+                    l.path
+                ));
+            }
+            lines.join("\n")
+        }
+        _ => "用法: /fs ls [path] | /fs cat <path> | /fs write <path> <content> | /fs edit <path> <from> <to> | /fs stat <path> | /fs log [n]".into(),
     }
 }
 
@@ -190,9 +244,7 @@ mod tests {
         {
             let l = loader.lock().unwrap();
             l.root().provide(Arc::new(LoaderService { loader: Arc::clone(&loader) }));
-            l.root().provide(Arc::new(FsService {
-                policy: crate::fs::FsPolicy::new(dir.to_path_buf()),
-            }));
+            l.root().provide(Arc::new(FsService::new(dir.to_path_buf())));
             l.root().provide(Arc::new(SubprocessService::new(dir.to_path_buf())));
         }
         loader
@@ -246,6 +298,32 @@ mod tests {
         let out = root.run_command("run echo hello").unwrap();
         assert!(out.contains("exit=0"), "{out}");
         assert!(out.contains("hello"), "{out}");
+    }
+
+    #[test]
+    fn mode_command_switches_and_fences() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let loader = test_loader(dir.path());
+        let root = loader.lock().unwrap().root().clone();
+
+        // 默认 workspace-write
+        let m = root.run_command("mode").unwrap();
+        assert!(m.contains("workspace-write"), "{m}");
+        // 切 read-only → 写被拒,读仍可
+        let r = root.run_command("mode read-only").unwrap();
+        assert!(r.contains("read-only"), "{r}");
+        let fs = root.inject::<FsService>().unwrap();
+        assert_eq!(fs.mode(), SandboxMode::ReadOnly);
+        let w = root.run_command("fs write x.txt hi").unwrap();
+        assert!(w.contains("只读"), "{w}");
+        // 切回 workspace-write → 恢复
+        root.run_command("mode workspace-write").unwrap();
+        assert_eq!(fs.mode(), SandboxMode::WorkspaceWrite);
+        let ok = root.run_command("fs write x.txt hi").unwrap();
+        assert!(ok.contains("已写入"), "{ok}");
+        // /fs log 有流水(含一次 DENY)
+        let log = root.run_command("fs log 10").unwrap();
+        assert!(log.contains("DENY"), "{log}");
     }
 
     #[test]

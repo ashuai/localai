@@ -41,8 +41,10 @@ cp .env.example .env        # then edit .env and fill in LLM_API_KEY
 - `/model Qwen3.6-35b` → switch model (35b is the default main model;
   the 27b is a Claude-distilled variant, avoid unless necessary);
 - `/plugins` `/help` `/clear` `/quit`; **PageUp/PageDown** scroll the history.
-- `/fs ls|cat|write|stat [path]` — filesystem tools with a policy fence
-  (workspace boundary + sensitive-file protection, aligned with DSH's `dsh-fs-sandbox`);
+- `/fs ls|cat|write|edit|stat|log [path]` — filesystem tools with a **four-layer
+  permission model**: sandbox mode (L0) / workspace boundary (L1) / sensitive-file
+  blocklist (L2) / read-before-edit + version guards (L3);
+- `/mode [read-only|workspace-write|full]` — view/switch the sandbox mode at runtime;
 - `/run <cmdline>` — subprocess execution inside the workspace root (30s timeout);
 - `/pwd` — show the workspace root.
 

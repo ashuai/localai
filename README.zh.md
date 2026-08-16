@@ -35,8 +35,9 @@ cp .env.example .env        # 编辑 .env 填入 LLM_API_KEY
 - `/load <插件>` `/unload <插件>` → 运行时热插拔(核心性质:卸载即回滚);
 - `/model Qwen3.6-35b` → 切换模型(默认主模型 35b;27b 是 Claude 蒸馏变体,非必要不用);
 - `/plugins` `/help` `/clear` `/quit`;**PageUp/PageDown** 翻看历史;
-- `/fs ls|cat|write|stat [路径]` —— 文件系统工具,带策略 fence(工作区边界 + 敏感文件保护,
-  对齐 DSH 的 dsh-fs-sandbox);
+- `/fs ls|cat|write|edit|stat|log [路径]` —— 文件系统工具,带**四层权限模型**:
+  沙箱模式(L0)/ 工作区边界(L1)/ 敏感文件黑名单(L2)/ 读前编辑 + 版本守卫(L3);
+- `/mode [read-only|workspace-write|full]` —— 查看/运行时切换沙箱模式;
 - `/run <命令行>` —— 工作区根内执行子进程(默认超时 30s);
 - `/pwd` —— 显示工作区根。
 

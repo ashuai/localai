@@ -85,11 +85,9 @@ fn main() -> anyhow::Result<()> {
     {
         let root = loader.lock().unwrap().root().clone();
         root.provide(Arc::new(LoaderService { loader: Arc::clone(&loader) }));
-        // 核心工具服务:fs(工作区边界 + 敏感文件策略)、subprocess(工作区根内执行)
+        // 核心工具服务:fs(四层权限:模式/边界/敏感文件/守卫)、subprocess(工作区根内执行)
         let workspace = std::env::current_dir().context("获取工作目录失败")?;
-        root.provide(Arc::new(localai::fs::FsService {
-            policy: localai::fs::FsPolicy::new(workspace.clone()),
-        }));
+        root.provide(Arc::new(localai::fs::FsService::new(workspace.clone())));
         root.provide(Arc::new(localai::exec::SubprocessService::new(workspace)));
     }
 
