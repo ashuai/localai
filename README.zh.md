@@ -34,7 +34,11 @@ cp .env.example .env        # 编辑 .env 填入 LLM_API_KEY
 - `/micro <文本>` → 微调用流水线演示(意图分类 → 并行标题/关键词/摘要);
 - `/load <插件>` `/unload <插件>` → 运行时热插拔(核心性质:卸载即回滚);
 - `/model Qwen3.6-35b` → 切换模型(默认主模型 35b;27b 是 Claude 蒸馏变体,非必要不用);
-- `/plugins` `/help` `/clear` `/quit`;**PageUp/PageDown** 翻看历史。
+- `/plugins` `/help` `/clear` `/quit`;**PageUp/PageDown** 翻看历史;
+- `/fs ls|cat|write|stat [路径]` —— 文件系统工具,带策略 fence(工作区边界 + 敏感文件保护,
+  对齐 DSH 的 dsh-fs-sandbox);
+- `/run <命令行>` —— 工作区根内执行子进程(默认超时 30s);
+- `/pwd` —— 显示工作区根。
 
 每次回复后,microtask 插件会自动做 2 个并行微调用(意图分类 + 关键词),状态区显示
 `[micro] 意图=question | 关键词=… (1.2s)` —— 零成本环境微调用的活体演示。
@@ -44,7 +48,9 @@ cp .env.example .env        # 编辑 .env 填入 LLM_API_KEY
 ```
 src/cordis/    插件化核心(Context / 事件 / Service / Plugin / Loader)
 src/llm/       模型层(OpenAI 兼容客户端 + 微调用协议)
-src/plugins/   内置插件(chat / microtask / tui)
+src/fs/        FsService + 策略 fence(工作区边界、敏感文件保护)
+src/exec/      SubprocessService(超时、工作目录限定)
+src/plugins/   内置插件(chat / microtask / tools / tui)
 src/tui/       TUI 渲染状态(归 tui 插件所有)
 docs/          architecture.md(cordis 映射)· model-layer.md(模型层论证)
 changelog/     版本日志 —— CI 发版的唯一数据源

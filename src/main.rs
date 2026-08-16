@@ -82,11 +82,16 @@ fn main() -> anyhow::Result<()> {
 
     // 装配:Loader(含 llm 核心服务)+ LoaderService(tui 插件热插拔需要)
     let loader = Arc::new(Mutex::new(Loader::new(client, plugins::builtin())));
-    loader
-        .lock()
-        .unwrap()
-        .root()
-        .provide(Arc::new(LoaderService { loader: Arc::clone(&loader) }));
+    {
+        let root = loader.lock().unwrap().root().clone();
+        root.provide(Arc::new(LoaderService { loader: Arc::clone(&loader) }));
+        // 核心工具服务:fs(工作区边界 + 敏感文件策略)、subprocess(工作区根内执行)
+        let workspace = std::env::current_dir().context("获取工作目录失败")?;
+        root.provide(Arc::new(localai::fs::FsService {
+            policy: localai::fs::FsPolicy::new(workspace.clone()),
+        }));
+        root.provide(Arc::new(localai::exec::SubprocessService::new(workspace)));
+    }
 
     // 加载配置插件(chat / microtask / tui)
     for p in &cfg.plugins {

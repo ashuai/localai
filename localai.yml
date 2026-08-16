@@ -20,6 +20,11 @@ plugins:
       model: Qwen3.6-35b
       max_retries: 2                  # 微调用零成本 → 解析失败直接重试
 
+  - name: tools
+    enabled: true
+    options:
+      run_timeout_secs: 30              # /run 子进程超时;fs 策略见 main 装配(工作区边界+敏感文件)
+
   - name: tui
     enabled: true
     options: {}                        # 交互层插件:命令/事件全走 cordis 通道

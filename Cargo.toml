@@ -17,3 +17,6 @@ crossterm = "0.28"
 
 [profile.release]
 lto = true
+
+[dev-dependencies]
+tempfile = "3"

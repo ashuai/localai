@@ -9,6 +9,8 @@
 
 pub mod cordis;
 pub mod events;
+pub mod exec;
+pub mod fs;
 pub mod llm;
 pub mod plugins;
 pub mod tui;
