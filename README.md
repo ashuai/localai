@@ -40,6 +40,31 @@ src/tui/       TUI 交互
 docs/          architecture.md(cordis 映射)· model-layer.md(模型层论证)
 ```
 
+## 多平台构建(GitHub Actions)
+
+无需本地工具链,推到 GitHub 即可自动编译,产物直接下载:
+
+```bash
+git remote add origin <你的仓库地址>
+git push -u origin main
+```
+
+- **Actions 页面**:每次 push 后自动构建 4 个 artifact,在仓库 `Actions` → 对应 run 的
+  **Artifacts** 里下载(登录 GitHub 后直接点):
+  - `localai-win-x64.zip` —— Windows 10+ x64(MSVC)
+  - `localai-macos-aarch64.tar.gz` —— macOS Apple Silicon
+  - `localai-macos-x86_64.tar.gz` —— macOS Intel
+  - `localai-linux-x64.tar.gz` —— Linux x64,CentOS 7+ 兼容(glibc 2.17,cross 容器构建)
+- **Release 页面**:打 tag 自动发布(推荐正式版本用):
+  ```bash
+  git tag v0.1.0 && git push origin v0.1.0
+  ```
+  构建完成后四份产物会挂到仓库 `Releases` 页面,点开即下。
+
+每个压缩包内:`localai[.exe]` + `localai.yml` + `.env.example` + `README.md`。
+首次使用:复制 `.env.example` 为 `.env` 并填入 LLM_API_KEY(服务器
+`~/.omlx/settings.json` 的 `auth.api_key`),然后运行 `localai`。
+
 ## 测试
 
 ```bash

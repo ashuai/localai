@@ -1,0 +1,137 @@
+# localai 多平台构建
+#
+# 产物(可在 Actions 页面下载):
+#   - localai-win-x64.zip        Windows 10+ x64 (MSVC)
+#   - localai-macos-aarch64.tar.gz  macOS Apple Silicon
+#   - localai-macos-x86_64.tar.gz   macOS Intel
+#   - localai-linux-x64.tar.gz   Linux x64,CentOS 7 兼容(glibc 2.17,cross 容器构建)
+#
+# 触发:push main / 打 tag v* / 手动 workflow_dispatch
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows x64 (win10+)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = "localai-win-x64"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/localai.exe $dir/
+          Copy-Item localai.yml, .env.example, README.md $dir/
+          Compress-Archive -Path $dir -DestinationPath localai-win-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localai-win-x64
+          path: localai-win-x64.zip
+
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          dir="localai-macos-${{ matrix.arch }}"
+          mkdir -p "$dir"
+          cp "target/${{ matrix.target }}/release/localai" "$dir/"
+          cp localai.yml .env.example README.md "$dir/"
+          tar czf "localai-macos-${{ matrix.arch }}.tar.gz" "$dir"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localai-macos-${{ matrix.arch }}
+          path: localai-macos-${{ matrix.arch }}.tar.gz
+
+  linux-centos:
+    name: Linux x64 (CentOS 7+ compatible)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+
+      # cross 的 x86_64-unknown-linux-gnu 镜像基于 CentOS 7(glibc 2.17),
+      # 产物可在 CentOS 7/8/Stream、Rocky、AlmaLinux 等"centos-like"系统上直接运行
+      - name: Install cross
+        run: cargo install cross --locked
+
+      - name: Build
+        run: cross build --release --target x86_64-unknown-linux-gnu
+
+      - name: Package
+        run: |
+          dir="localai-linux-x64"
+          mkdir -p "$dir"
+          cp target/x86_64-unknown-linux-gnu/release/localai "$dir/"
+          cp localai.yml .env.example README.md "$dir/"
+          tar czf localai-linux-x64.tar.gz "$dir"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localai-linux-x64
+          path: localai-linux-x64.tar.gz
+
+  # 打 v* tag 时把四份产物发布为 GitHub Release(下载最方便)
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos, linux-centos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
