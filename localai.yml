@@ -26,6 +26,14 @@ plugins:
       enable_thinking: false          # 本地推理模型默认把思考过程混进 content;关闭后回复直接、JSON 干净
       history_turns: 6                # 上下文纪律(memory 插件未加载时的滑动窗口兜底)
 
+  - name: subagent
+    enabled: true
+    options:
+      max_rounds: 2                   # 子任务自检循环:1=单次直出;2=自检一轮
+      parallel_limit: 3               # --parallel 上限(本地 AI 并发不是强项,克制)
+      tools: false                    # 子任务默认不带工具;探索型任务主 agent 显式 --tools
+      # model: Qwen3.6-35b            # 默认跟随主模型;--model 可切换(视觉→Qwen3.8-27B-4bit)
+
   - name: microtask
     enabled: true
     options:

@@ -35,10 +35,18 @@ type ToolRunner = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 /// 工具步骤状态回调(发 SessionStatus 给 TUI)。
 type ToolStatusFn = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// 模型可触发的工具命令白名单(/quit /unload 等绝不暴露给模型)
-const TOOL_WHITELIST: [&str; 4] = ["fs", "run", "pwd", "mode"];
+/// 模型可触发的工具命令白名单(/quit /unload 等绝不暴露给模型)。
+/// - subagent:主 agent 自主委派(subagent 插件提供执行器;未加载时命令未注册 → 回灌错误文案)
+/// - models:渐进式载入模型档案(subagent 插件提供;/models 输出路由表 + 委派准则)
+const TOOL_WHITELIST: [&str; 6] = ["fs", "run", "pwd", "mode", "subagent", "models"];
 /// 单次用户消息最多连续工具轮数(防模型死循环烧 token)
 const MAX_TOOL_ROUNDS: usize = 3;
+
+/// 委派轻提示(≈50 token,常驻 base prompt)。
+/// 与 subagent 插件(`src/plugins/subagent.rs` 的 `LEAN_HINT`)保持一致,
+/// 避免跨插件依赖;完整档案由模型在需要时 `/models` 渐进式载入。
+/// 含结果审查准则:子任务结果回来主 agent 必须先 review 再整合。
+const LEAN_HINT: &str = "你有委派工具 /subagent 与模型查询 /models。可用模型:文本 Qwen3.6-35b(快)、视觉 Qwen3.8-27B-4bit、语音 Fun-ASR-Nano、文档 MarkItDown。详细档案与委派准则:/models 查询。收到子任务结果先审查:与已知事实矛盾/没答任务 → 不整合、指出问题。";
 
 pub fn factory() -> Box<dyn Plugin> {
     Box::new(ChatPlugin)
@@ -272,7 +280,7 @@ impl Plugin for ChatPlugin {
             client.set_model(m.clone());
         }
         let base = format!(
-            "{CHAT_SYSTEM}\n\n# 系统环境(工具启动时收集)\n{}",
+            "{CHAT_SYSTEM}\n\n# 系统环境(工具启动时收集)\n{}\n\n{LEAN_HINT}",
             crate::system::SystemInfo::collect().to_prompt()
         );
         // memory 插件可选注入:未加载 → 回退滑动窗口
